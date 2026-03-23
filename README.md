@@ -34,3 +34,19 @@ ai-llm-assistant/
   - Add document upload
   - Add PDF question answering
   - Add RAG pipeline
+
+
+  ## New Features
+- PDF upload
+- Text extraction from PDF
+- Document-aware Q&A
+- Chat interface with assistant modes
+
+## Current Limitations
+- Only the first few chunks of the uploaded document are used as context
+- No semantic retrieval yet
+
+## Next Steps
+- Add embeddings
+- Add vector search
+- Convert into a true RAG pipeline
