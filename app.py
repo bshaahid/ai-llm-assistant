@@ -4,6 +4,7 @@ from openai import OpenAI
 import streamlit as st
 
 from utils.pdf_utils import extract_text_from_pdf, chunk_text
+from utils.rag_utils import get_top_k_chunks
 
 load_dotenv()
 
@@ -18,7 +19,7 @@ client = OpenAI(api_key=api_key)
 st.set_page_config(page_title="AI LLM Assistant", page_icon="🤖", layout="centered")
 
 st.title("🤖 My AI Assistant")
-st.caption("Day 3 upgrade: PDF upload + document-aware Q&A")
+st.caption("Day 4 upgrade: local RAG with embeddings-based retrieval")
 
 ASSISTANT_MODES = {
     "General Assistant": (
@@ -47,6 +48,9 @@ if "document_text" not in st.session_state:
 if "document_chunks" not in st.session_state:
     st.session_state.document_chunks = []
 
+if "chunk_embeddings" not in st.session_state:
+    st.session_state.chunk_embeddings = []
+
 with st.sidebar:
     st.header("Controls")
 
@@ -64,12 +68,24 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
     if uploaded_file is not None:
-        extracted_text = extract_text_from_pdf(uploaded_file)
-        st.session_state.document_text = extracted_text
-        st.session_state.document_chunks = chunk_text(extracted_text)
+        with st.spinner("Reading and indexing PDF..."):
+            extracted_text = extract_text_from_pdf(uploaded_file)
+            chunks = chunk_text(extracted_text)
 
-        st.success("PDF uploaded and processed successfully!")
-        st.write(f"Extracted {len(st.session_state.document_chunks)} text chunks.")
+            chunk_embeddings = []
+            for chunk in chunks:
+                embedding_response = client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=chunk
+                )
+                chunk_embeddings.append(embedding_response.data[0].embedding)
+
+            st.session_state.document_text = extracted_text
+            st.session_state.document_chunks = chunks
+            st.session_state.chunk_embeddings = chunk_embeddings
+
+        st.success("PDF uploaded, chunked, and indexed successfully!")
+        st.write(f"Created {len(chunks)} chunks and embeddings.")
 
     if st.button("Reset Chat"):
         st.session_state.messages = []
@@ -80,14 +96,14 @@ with st.sidebar:
 
     st.markdown("### Document Status")
     if st.session_state.document_text:
-        st.write("PDF loaded and ready for questions.")
+        st.write("PDF loaded and retrieval is ready.")
     else:
         st.write("No PDF uploaded yet.")
 
 if len(st.session_state.messages) == 0:
     welcome_message = f"Hi! I’m your **{st.session_state.selected_mode}**."
     if st.session_state.document_text:
-        welcome_message += " I can also answer questions about your uploaded PDF."
+        welcome_message += " I can answer questions using semantic retrieval from your PDF."
     else:
         welcome_message += " Ask me anything."
     with st.chat_message("assistant"):
@@ -109,13 +125,26 @@ if user_input:
         with st.spinner("Thinking..."):
             system_prompt = ASSISTANT_MODES[st.session_state.selected_mode]
 
-            if st.session_state.document_text:
-                context = "\n\n".join(st.session_state.document_chunks[:3])
+            if st.session_state.document_chunks and st.session_state.chunk_embeddings:
+                question_embedding_response = client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=user_input
+                )
+                question_embedding = question_embedding_response.data[0].embedding
+
+                top_chunks = get_top_k_chunks(
+                    question_embedding,
+                    st.session_state.chunk_embeddings,
+                    st.session_state.document_chunks,
+                    k=3
+                )
+
+                context = "\n\n".join(top_chunks)
 
                 system_prompt += (
-                    "\n\nUse the following document context to answer the user’s question. "
+                    "\n\nUse the following retrieved document context to answer the user’s question. "
                     "If the answer is not in the document, say so clearly.\n\n"
-                    f"Document Context:\n{context}"
+                    f"Retrieved Context:\n{context}"
                 )
 
             api_messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
